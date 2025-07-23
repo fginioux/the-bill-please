@@ -2,3 +2,6 @@ target/
 logs/
 .idea/
 /logs
+
+terraform/.terraform.lock.hcl
+terraform/.terraform/
