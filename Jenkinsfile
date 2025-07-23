@@ -1,28 +1,32 @@
 pipeline {
     agent any
 
-    environment {
-        SERVER_IP_CRED_ID = 'server-ip-id'
-        GITHUB_TOKEN_CRED_ID = 'github-token-id'
-    }
-
     triggers {
         githubPush()
     }
 
     stages {
+        stage('Test DB Connection') {
+            steps {
+                sh '''
+                PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c "\\conninfo"
+                '''
+            }
+        }
+
         stage('Checkout') {
             steps {
-                withCredentials([string(credentialsId: "${GITHUB_TOKEN_CRED_ID}", variable: 'GITHUB_TOKEN')]) {
+                withCredentials([string(credentialsId: "GITHUB_TOKEN_CRED_ID", variable: 'GITHUB_TOKEN')]) {
                     sh 'git config --global credential.helper store'
                     sh 'echo "https://${GITHUB_TOKEN}:@github.com" > ~/.git-credentials'
-                    git url: "https://github.com/dwididit/springboot-simple-restful-api-jenkins.git", branch: 'master'
+                    git url: "${GITHUB_URL}", branch: 'main'
                 }
             }
         }
 
         stage('Build') {
             steps {
+                sh 'MAVEN_OPTS="-Xmx512m" mvn clean package -T 1C -Dmaven.compiler.fork=true'
                 sh 'mvn clean package'
             }
         }
@@ -31,7 +35,7 @@ pipeline {
             steps {
                 writeFile file: 'deploy.sh', text: '''#!/bin/bash
 cd /home/ubuntu/
-docker compose down
+docker compose down || true
 docker compose up -d
 '''
                 sh 'chmod +x deploy.sh'
@@ -41,11 +45,13 @@ docker compose up -d
         stage('Transfer Files') {
             steps {
                 script {
-                    withCredentials([string(credentialsId: "${SERVER_IP_CRED_ID}", variable: 'SERVER_IP')]) {
-                        sshagent(credentials: ['aws-ec2-pem']) {
+                    withCredentials([string(credentialsId: "SERVER_IP_CRED_ID", variable: 'SERVER_IP')]) {
+                        sshagent(credentials: ['aws-ec2']) {
                             sh '''
-                            scp -o StrictHostKeyChecking=no target/store-0.0.1-SNAPSHOT.jar ubuntu@$SERVER_IP:/home/ubuntu/
+                            ssh -o StrictHostKeyChecking=no ubuntu@$SERVER_IP "mkdir -p /home/ubuntu/target"
+                            scp -o StrictHostKeyChecking=no target/store-0.0.1-SNAPSHOT.jar ubuntu@$SERVER_IP:/home/ubuntu/target/
                             scp -o StrictHostKeyChecking=no docker-compose.yml ubuntu@$SERVER_IP:/home/ubuntu/
+                            scp -o StrictHostKeyChecking=no Dockerfile ubuntu@$SERVER_IP:/home/ubuntu
                             scp -o StrictHostKeyChecking=no deploy.sh ubuntu@$SERVER_IP:/home/ubuntu/
                             '''
                         }
@@ -57,8 +63,8 @@ docker compose up -d
         stage('Deploy to Staging') {
             steps {
                 script {
-                    withCredentials([string(credentialsId: "${SERVER_IP_CRED_ID}", variable: 'SERVER_IP')]) {
-                        sshagent(credentials: ['aws-ec2-pem']) {
+                    withCredentials([string(credentialsId: "SERVER_IP_CRED_ID", variable: 'SERVER_IP')]) {
+                        sshagent(credentials: ['aws-ec2']) {
                             sh '''
                             ssh -o StrictHostKeyChecking=no ubuntu@$SERVER_IP "/home/ubuntu/deploy.sh"
                             '''
